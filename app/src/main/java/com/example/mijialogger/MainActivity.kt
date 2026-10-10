@@ -39,11 +39,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -272,9 +271,9 @@ class MainActivity : ComponentActivity() {
             discoveredSensors.add(sensor)
         }
 
-        val sorted = discoveredSensors.sortedByDescending { it.rssi }
+        val sortedSensors = discoveredSensors.sortedByDescending { it.rssi }
         discoveredSensors.clear()
-        discoveredSensors.addAll(sorted)
+        discoveredSensors.addAll(sortedSensors)
     }
 
     private fun selectSensor(sensor: DiscoveredSensor) {
@@ -356,7 +355,7 @@ class MainActivity : ComponentActivity() {
 
         if (version != 2) {
             diagnosticText = "Unsupported BTHome version: $version"
-            scanStatus = "Unsupported BTHome version: $version"
+            scanStatus = diagnosticText
             return
         }
 
@@ -379,7 +378,6 @@ class MainActivity : ComponentActivity() {
 
             when (objectId) {
                 0x00 -> {
-                    // Packet ID / event counter: uint8
                     if (index >= payload.size) {
                         diagnosticText = "Truncated packet ID field."
                         break
@@ -388,7 +386,6 @@ class MainActivity : ComponentActivity() {
                 }
 
                 0x01 -> {
-                    // Battery: uint8, percent
                     if (index >= payload.size) {
                         diagnosticText = "Truncated battery field."
                         break
@@ -398,7 +395,6 @@ class MainActivity : ComponentActivity() {
                 }
 
                 0x02 -> {
-                    // Temperature: signed int16 LE, 0.01 °C
                     if (index + 1 >= payload.size) {
                         diagnosticText = "Truncated temperature field."
                         break
@@ -413,7 +409,6 @@ class MainActivity : ComponentActivity() {
                 }
 
                 0x03 -> {
-                    // Humidity: uint16 LE, 0.01 %
                     if (index + 1 >= payload.size) {
                         diagnosticText = "Truncated humidity field."
                         break
@@ -428,7 +423,6 @@ class MainActivity : ComponentActivity() {
                 }
 
                 0x0C -> {
-                    // Voltage: uint16 LE, 0.001 V
                     if (index + 1 >= payload.size) {
                         diagnosticText = "Truncated voltage field."
                         break
@@ -446,6 +440,7 @@ class MainActivity : ComponentActivity() {
                     unknownObjectId = objectId
                     diagnosticText =
                         "Unsupported BTHome object: 0x%02X".format(objectId)
+
                     Log.w(
                         LOG_TAG,
                         "Unsupported BTHome object: 0x%02X; payload: %s"
@@ -544,9 +539,9 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val LOG_TAG = "MijiaLogger"
+        private const val LOG_TAG = "BT2HLogger"
 
-        private const val PREFS_NAME = "mijia_logger_settings"
+        private const val PREFS_NAME = "bt2h_logger_settings"
         private const val KEY_SELECTED_MAC = "selected_sensor_mac"
         private const val KEY_SELECTED_NAME = "selected_sensor_name"
     }
@@ -578,7 +573,7 @@ private fun LoggerScreen(
         Spacer(modifier = Modifier.height(20.dp))
 
         Text(
-            text = "Mijia Temp Logger",
+            text = "BT2H Logger",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold
         )
@@ -745,7 +740,11 @@ private fun SelectedSensorScreen(
 
             voltage?.let {
                 Text(
-                    text = String.format(Locale.getDefault(), "Voltage: %.3f V", it),
+                    text = String.format(
+                        Locale.getDefault(),
+                        "Battery voltage: %.3f V",
+                        it
+                    ),
                     fontSize = 14.sp,
                     color = Color.DarkGray
                 )
