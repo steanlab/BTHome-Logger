@@ -1,4 +1,4 @@
-name: Build My App
+name: Build BT2H Logger
 
 on:
   push:
@@ -26,9 +26,12 @@ jobs:
       - name: Compile and build debug APK
         run: gradle assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk BT2H-Logger.apk
+
+      - name: Upload BT2H Logger APK
         uses: actions/upload-artifact@v6
         with:
-          name: Mijia-Bluetooth-App
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: BT2H-Logger
+          path: BT2H-Logger.apk
           if-no-files-found: error
