@@ -32,6 +32,20 @@
         android:label="BT2H Logger"
         android:theme="@android:style/Theme.NoTitleBar">
 
+    <receiver
+        android:name=".Bt2hWidgetReceiver"
+        android:exported="true"
+        android:label="BT2H Logger">
+
+    <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+    </intent-filter>
+
+    <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/bt2h_widget_info" />
+</receiver>
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
