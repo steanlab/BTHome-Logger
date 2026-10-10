@@ -39,11 +39,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,14 +68,17 @@ class MainActivity : ComponentActivity() {
     private var temperature by mutableStateOf<Float?>(null)
     private var humidity by mutableStateOf<Float?>(null)
     private var battery by mutableStateOf<Int?>(null)
+    private var voltage by mutableStateOf<Float?>(null)
 
     private var selectedMac by mutableStateOf<String?>(null)
     private var selectedName by mutableStateOf<String?>(null)
 
-    private var lastMac by mutableStateOf("")
     private var rssi by mutableIntStateOf(0)
     private var scanStatus by mutableStateOf("Preparing Bluetooth scan…")
     private var isScanning by mutableStateOf(false)
+
+    private var lastPayloadHex by mutableStateOf("No BTHome packet received yet.")
+    private var diagnosticText by mutableStateOf("")
 
     private val discoveredSensors = mutableStateListOf<DiscoveredSensor>()
 
@@ -119,8 +122,11 @@ class MainActivity : ComponentActivity() {
                         temperature = temperature,
                         humidity = humidity,
                         battery = battery,
+                        voltage = voltage,
                         rssi = rssi,
                         isScanning = isScanning,
+                        payloadHex = lastPayloadHex,
+                        diagnosticText = diagnosticText,
                         onSelectSensor = { sensor ->
                             selectSensor(sensor)
                         },
@@ -233,7 +239,8 @@ class MainActivity : ComponentActivity() {
             val chosenMac = selectedMac
 
             if (chosenMac == null) {
-                scanStatus = "Found ${discoveredSensors.size} BTHome sensor(s). Select one."
+                scanStatus =
+                    "Found ${discoveredSensors.size} BTHome sensor(s). Select one."
                 return
             }
 
@@ -273,12 +280,19 @@ class MainActivity : ComponentActivity() {
     private fun selectSensor(sensor: DiscoveredSensor) {
         selectedMac = sensor.mac
         selectedName = sensor.name
-        lastMac = sensor.mac
 
         preferences.edit()
             .putString(KEY_SELECTED_MAC, sensor.mac)
             .putString(KEY_SELECTED_NAME, sensor.name)
             .apply()
+
+        temperature = null
+        humidity = null
+        battery = null
+        voltage = null
+        rssi = 0
+        lastPayloadHex = "Waiting for BTHome data…"
+        diagnosticText = ""
 
         scanStatus = "Selected: ${sensor.name} (${sensor.mac})"
     }
@@ -295,8 +309,10 @@ class MainActivity : ComponentActivity() {
         temperature = null
         humidity = null
         battery = null
-        lastMac = ""
+        voltage = null
         rssi = 0
+        lastPayloadHex = "No BTHome packet received yet."
+        diagnosticText = ""
 
         scanStatus = "Scanning for BTHome sensors. Select one from the list."
     }
@@ -327,13 +343,25 @@ class MainActivity : ComponentActivity() {
     ) {
         if (payload.isEmpty()) return
 
+        val payloadHex = payload.joinToString(" ") {
+            "%02X".format(it.toInt() and 0xFF)
+        }
+
+        lastPayloadHex = payloadHex
+        Log.d(LOG_TAG, "BTHome from $macAddress: $payloadHex")
+
         val deviceInfo = payload[0].toInt() and 0xFF
         val encrypted = (deviceInfo and 0x01) != 0
         val version = (deviceInfo shr 5) and 0x07
 
-        if (version != 2) return
+        if (version != 2) {
+            diagnosticText = "Unsupported BTHome version: $version"
+            scanStatus = "Unsupported BTHome version: $version"
+            return
+        }
 
         if (encrypted) {
+            diagnosticText = "Encrypted BTHome v2 packet."
             scanStatus = "Selected sensor uses encrypted BTHome packets."
             return
         }
@@ -342,20 +370,39 @@ class MainActivity : ComponentActivity() {
         var parsedTemperature: Float? = null
         var parsedHumidity: Float? = null
         var parsedBattery: Int? = null
+        var parsedVoltage: Float? = null
+        var unknownObjectId: Int? = null
 
         while (index < payload.size) {
             val objectId = payload[index].toInt() and 0xFF
             index += 1
 
             when (objectId) {
+                0x00 -> {
+                    // Packet ID / event counter: uint8
+                    if (index >= payload.size) {
+                        diagnosticText = "Truncated packet ID field."
+                        break
+                    }
+                    index += 1
+                }
+
                 0x01 -> {
-                    if (index >= payload.size) break
+                    // Battery: uint8, percent
+                    if (index >= payload.size) {
+                        diagnosticText = "Truncated battery field."
+                        break
+                    }
                     parsedBattery = payload[index].toInt() and 0xFF
                     index += 1
                 }
 
                 0x02 -> {
-                    if (index + 1 >= payload.size) break
+                    // Temperature: signed int16 LE, 0.01 °C
+                    if (index + 1 >= payload.size) {
+                        diagnosticText = "Truncated temperature field."
+                        break
+                    }
 
                     val low = payload[index].toInt() and 0xFF
                     val high = payload[index + 1].toInt() and 0xFF
@@ -366,7 +413,11 @@ class MainActivity : ComponentActivity() {
                 }
 
                 0x03 -> {
-                    if (index + 1 >= payload.size) break
+                    // Humidity: uint16 LE, 0.01 %
+                    if (index + 1 >= payload.size) {
+                        diagnosticText = "Truncated humidity field."
+                        break
+                    }
 
                     val low = payload[index].toInt() and 0xFF
                     val high = payload[index + 1].toInt() and 0xFF
@@ -376,34 +427,70 @@ class MainActivity : ComponentActivity() {
                     index += 2
                 }
 
-                else -> {
-                    Log.d(
-                        LOG_TAG,
-                        "Unsupported BTHome object: 0x${objectId.toString(16)}"
-                    )
-                    return
+                0x0C -> {
+                    // Voltage: uint16 LE, 0.001 V
+                    if (index + 1 >= payload.size) {
+                        diagnosticText = "Truncated voltage field."
+                        break
+                    }
+
+                    val low = payload[index].toInt() and 0xFF
+                    val high = payload[index + 1].toInt() and 0xFF
+                    val rawVoltage = (high shl 8) or low
+
+                    parsedVoltage = rawVoltage * 0.001f
+                    index += 2
                 }
+
+                else -> {
+                    unknownObjectId = objectId
+                    diagnosticText =
+                        "Unsupported BTHome object: 0x%02X".format(objectId)
+                    Log.w(
+                        LOG_TAG,
+                        "Unsupported BTHome object: 0x%02X; payload: %s"
+                            .format(objectId, payloadHex)
+                    )
+                    break
+                }
+            }
+
+            if (unknownObjectId != null) {
+                break
             }
         }
 
-        if (parsedTemperature == null && parsedHumidity == null) return
-
-        lastMac = macAddress
         rssi = signalStrength
 
         parsedTemperature?.let { temperature = it }
         parsedHumidity?.let { humidity = it }
         parsedBattery?.let { battery = it }
+        parsedVoltage?.let { voltage = it }
 
-        scanStatus = "Fresh data received from selected sensor."
+        if (parsedTemperature != null || parsedHumidity != null) {
+            diagnosticText = if (unknownObjectId != null) {
+                "Data decoded; packet also has 0x%02X.".format(unknownObjectId)
+            } else {
+                "BTHome v2 decoded successfully."
+            }
 
-        logToFile(
-            mac = macAddress,
-            temp = parsedTemperature,
-            hum = parsedHumidity,
-            batteryPercent = parsedBattery,
-            signalStrength = signalStrength
-        )
+            scanStatus = "Fresh data received from selected sensor."
+
+            logToFile(
+                mac = macAddress,
+                temp = parsedTemperature,
+                hum = parsedHumidity,
+                batteryPercent = parsedBattery,
+                voltageValue = parsedVoltage,
+                signalStrength = signalStrength,
+                payloadHex = payloadHex
+            )
+        } else if (unknownObjectId != null) {
+            scanStatus = diagnosticText
+        } else {
+            diagnosticText = "No temperature or humidity fields in this packet."
+            scanStatus = diagnosticText
+        }
     }
 
     private fun logToFile(
@@ -411,7 +498,9 @@ class MainActivity : ComponentActivity() {
         temp: Float?,
         hum: Float?,
         batteryPercent: Int?,
-        signalStrength: Int
+        voltageValue: Float?,
+        signalStrength: Int,
+        payloadHex: String
     ) {
         try {
             val documentsDirectory =
@@ -436,10 +525,15 @@ class MainActivity : ComponentActivity() {
                 "$it %"
             } ?: "n/a"
 
+            val voltageText = voltageValue?.let {
+                String.format(Locale.US, "%.3f V", it)
+            } ?: "n/a"
+
             val line =
                 "[$timestamp] MAC: $mac | Temp: $temperatureText | " +
                     "Humidity: $humidityText | Battery: $batteryText | " +
-                    "RSSI: $signalStrength dBm\n"
+                    "Voltage: $voltageText | RSSI: $signalStrength dBm | " +
+                    "Payload: $payloadHex\n"
 
             logFile.appendText(line)
             Log.d(LOG_TAG, "Saved: $line")
@@ -467,8 +561,11 @@ private fun LoggerScreen(
     temperature: Float?,
     humidity: Float?,
     battery: Int?,
+    voltage: Float?,
     rssi: Int,
     isScanning: Boolean,
+    payloadHex: String,
+    diagnosticText: String,
     onSelectSensor: (DiscoveredSensor) -> Unit,
     onChangeSensor: () -> Unit
 ) {
@@ -509,7 +606,10 @@ private fun LoggerScreen(
                 temperature = temperature,
                 humidity = humidity,
                 battery = battery,
+                voltage = voltage,
                 rssi = rssi,
+                payloadHex = payloadHex,
+                diagnosticText = diagnosticText,
                 onChangeSensor = onChangeSensor
             )
         }
@@ -574,7 +674,10 @@ private fun SelectedSensorScreen(
     temperature: Float?,
     humidity: Float?,
     battery: Int?,
+    voltage: Float?,
     rssi: Int,
+    payloadHex: String,
+    diagnosticText: String,
     onChangeSensor: () -> Unit
 ) {
     Text(
@@ -639,10 +742,42 @@ private fun SelectedSensorScreen(
                     color = Color.DarkGray
                 )
             }
+
+            voltage?.let {
+                Text(
+                    text = String.format(Locale.getDefault(), "Voltage: %.3f V", it),
+                    fontSize = 14.sp,
+                    color = Color.DarkGray
+                )
+            }
         }
     }
 
-    Spacer(modifier = Modifier.height(24.dp))
+    Spacer(modifier = Modifier.height(16.dp))
+
+    if (diagnosticText.isNotEmpty()) {
+        Text(
+            text = diagnosticText,
+            fontSize = 13.sp,
+            color = Color.DarkGray
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+
+    Text(
+        text = "BTHome payload:",
+        fontSize = 12.sp,
+        color = Color.Gray
+    )
+
+    Text(
+        text = payloadHex,
+        fontSize = 12.sp,
+        color = Color.Gray
+    )
+
+    Spacer(modifier = Modifier.height(20.dp))
 
     Button(onClick = onChangeSensor) {
         Text("Change sensor")
