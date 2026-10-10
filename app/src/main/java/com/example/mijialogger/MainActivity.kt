@@ -8,6 +8,7 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -17,6 +18,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -25,9 +27,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -49,23 +57,36 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+data class DiscoveredSensor(
+    val mac: String,
+    val name: String,
+    val rssi: Int
+)
+
 class MainActivity : ComponentActivity() {
 
     private var temperature by mutableStateOf<Float?>(null)
     private var humidity by mutableStateOf<Float?>(null)
     private var battery by mutableStateOf<Int?>(null)
-    private var targetMac by mutableStateOf("")
+
+    private var selectedMac by mutableStateOf<String?>(null)
+    private var selectedName by mutableStateOf<String?>(null)
+
+    private var lastMac by mutableStateOf("")
     private var rssi by mutableIntStateOf(0)
     private var scanStatus by mutableStateOf("Preparing Bluetooth scan…")
     private var isScanning by mutableStateOf(false)
+
+    private val discoveredSensors = mutableStateListOf<DiscoveredSensor>()
 
     private val bthomeUuid =
         ParcelUuid.fromString("0000FCD2-0000-1000-8000-00805F9B34FB")
 
     private var bluetoothAdapter: BluetoothAdapter? = null
+    private lateinit var preferences: SharedPreferences
 
     private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             if (hasRequiredPermissions()) {
                 startBleScan()
             } else {
@@ -75,6 +96,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        preferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        selectedMac = preferences.getString(KEY_SELECTED_MAC, null)
+        selectedName = preferences.getString(KEY_SELECTED_NAME, null)
 
         val bluetoothManager =
             getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -88,12 +113,20 @@ class MainActivity : ComponentActivity() {
                 ) {
                     LoggerScreen(
                         status = scanStatus,
-                        mac = targetMac,
+                        selectedMac = selectedMac,
+                        selectedName = selectedName,
+                        sensors = discoveredSensors,
                         temperature = temperature,
                         humidity = humidity,
                         battery = battery,
                         rssi = rssi,
-                        isScanning = isScanning
+                        isScanning = isScanning,
+                        onSelectSensor = { sensor ->
+                            selectSensor(sensor)
+                        },
+                        onChangeSensor = {
+                            clearSelectedSensor()
+                        }
                     )
                 }
             }
@@ -160,8 +193,12 @@ class MainActivity : ComponentActivity() {
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
-        scanStatus = "Scanning for BTHome advertisements…"
         isScanning = true
+        scanStatus = if (selectedMac == null) {
+            "Scanning for BTHome sensors. Select one from the list."
+        } else {
+            "Looking for selected sensor: $selectedMac"
+        }
 
         scanner.startScan(null, settings, scanCallback)
     }
@@ -180,8 +217,32 @@ class MainActivity : ComponentActivity() {
             val serviceData =
                 result.scanRecord?.getServiceData(bthomeUuid) ?: return
 
+            val mac = result.device.address
+            val name = result.scanRecord?.deviceName
+                ?: result.device.name
+                ?: "BTHome device"
+
+            addOrUpdateSensor(
+                DiscoveredSensor(
+                    mac = mac,
+                    name = name,
+                    rssi = result.rssi
+                )
+            )
+
+            val chosenMac = selectedMac
+
+            if (chosenMac == null) {
+                scanStatus = "Found ${discoveredSensors.size} BTHome sensor(s). Select one."
+                return
+            }
+
+            if (!mac.equals(chosenMac, ignoreCase = true)) {
+                return
+            }
+
             parseBthomeData(
-                macAddress = result.device.address,
+                macAddress = mac,
                 signalStrength = result.rssi,
                 payload = serviceData
             )
@@ -191,6 +252,53 @@ class MainActivity : ComponentActivity() {
             isScanning = false
             scanStatus = "BLE scan failed: ${scanErrorName(errorCode)} ($errorCode)"
         }
+    }
+
+    private fun addOrUpdateSensor(sensor: DiscoveredSensor) {
+        val index = discoveredSensors.indexOfFirst {
+            it.mac.equals(sensor.mac, ignoreCase = true)
+        }
+
+        if (index >= 0) {
+            discoveredSensors[index] = sensor
+        } else {
+            discoveredSensors.add(sensor)
+        }
+
+        val sorted = discoveredSensors.sortedByDescending { it.rssi }
+        discoveredSensors.clear()
+        discoveredSensors.addAll(sorted)
+    }
+
+    private fun selectSensor(sensor: DiscoveredSensor) {
+        selectedMac = sensor.mac
+        selectedName = sensor.name
+        lastMac = sensor.mac
+
+        preferences.edit()
+            .putString(KEY_SELECTED_MAC, sensor.mac)
+            .putString(KEY_SELECTED_NAME, sensor.name)
+            .apply()
+
+        scanStatus = "Selected: ${sensor.name} (${sensor.mac})"
+    }
+
+    private fun clearSelectedSensor() {
+        preferences.edit()
+            .remove(KEY_SELECTED_MAC)
+            .remove(KEY_SELECTED_NAME)
+            .apply()
+
+        selectedMac = null
+        selectedName = null
+
+        temperature = null
+        humidity = null
+        battery = null
+        lastMac = ""
+        rssi = 0
+
+        scanStatus = "Scanning for BTHome sensors. Select one from the list."
     }
 
     private fun scanErrorName(errorCode: Int): String {
@@ -226,7 +334,7 @@ class MainActivity : ComponentActivity() {
         if (version != 2) return
 
         if (encrypted) {
-            scanStatus = "Encrypted BTHome packet received from $macAddress."
+            scanStatus = "Selected sensor uses encrypted BTHome packets."
             return
         }
 
@@ -251,8 +359,8 @@ class MainActivity : ComponentActivity() {
 
                     val low = payload[index].toInt() and 0xFF
                     val high = payload[index + 1].toInt() and 0xFF
-
                     val rawTemperature = ((high shl 8) or low).toShort()
+
                     parsedTemperature = rawTemperature * 0.01f
                     index += 2
                 }
@@ -262,8 +370,8 @@ class MainActivity : ComponentActivity() {
 
                     val low = payload[index].toInt() and 0xFF
                     val high = payload[index + 1].toInt() and 0xFF
-
                     val rawHumidity = (high shl 8) or low
+
                     parsedHumidity = rawHumidity * 0.01f
                     index += 2
                 }
@@ -271,7 +379,7 @@ class MainActivity : ComponentActivity() {
                 else -> {
                     Log.d(
                         LOG_TAG,
-                        "Unknown BTHome object 0x${objectId.toString(16)}; packet ignored."
+                        "Unsupported BTHome object: 0x${objectId.toString(16)}"
                     )
                     return
                 }
@@ -280,14 +388,15 @@ class MainActivity : ComponentActivity() {
 
         if (parsedTemperature == null && parsedHumidity == null) return
 
-        targetMac = macAddress
+        lastMac = macAddress
         rssi = signalStrength
 
         parsedTemperature?.let { temperature = it }
         parsedHumidity?.let { humidity = it }
         parsedBattery?.let { battery = it }
 
-        scanStatus = "Fresh BTHome data received."
+        scanStatus = "Fresh data received from selected sensor."
+
         logToFile(
             mac = macAddress,
             temp = parsedTemperature,
@@ -309,6 +418,7 @@ class MainActivity : ComponentActivity() {
                 getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: return
 
             val logFile = File(documentsDirectory, "bthome_logs.txt")
+
             val timestamp = SimpleDateFormat(
                 "yyyy-MM-dd HH:mm:ss",
                 Locale.getDefault()
@@ -326,41 +436,50 @@ class MainActivity : ComponentActivity() {
                 "$it %"
             } ?: "n/a"
 
-            val logLine =
+            val line =
                 "[$timestamp] MAC: $mac | Temp: $temperatureText | " +
                     "Humidity: $humidityText | Battery: $batteryText | " +
                     "RSSI: $signalStrength dBm\n"
 
-            logFile.appendText(logLine)
-            Log.d(LOG_TAG, "Saved: $logLine")
+            logFile.appendText(line)
+            Log.d(LOG_TAG, "Saved: $line")
         } catch (exception: Exception) {
             Log.e(LOG_TAG, "Could not write log file.", exception)
-            scanStatus = "Data received, but file logging failed."
+            scanStatus = "Data received, but saving the log failed."
         }
     }
 
     companion object {
         private const val LOG_TAG = "MijiaLogger"
+
+        private const val PREFS_NAME = "mijia_logger_settings"
+        private const val KEY_SELECTED_MAC = "selected_sensor_mac"
+        private const val KEY_SELECTED_NAME = "selected_sensor_name"
     }
 }
 
 @Composable
 private fun LoggerScreen(
     status: String,
-    mac: String,
+    selectedMac: String?,
+    selectedName: String?,
+    sensors: List<DiscoveredSensor>,
     temperature: Float?,
     humidity: Float?,
     battery: Int?,
     rssi: Int,
-    isScanning: Boolean
+    isScanning: Boolean,
+    onSelectSensor: (DiscoveredSensor) -> Unit,
+    onChangeSensor: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Spacer(modifier = Modifier.height(20.dp))
+
         Text(
             text = "Mijia Temp Logger",
             fontSize = 28.sp,
@@ -375,69 +494,157 @@ private fun LoggerScreen(
             color = Color.Gray
         )
 
-        Spacer(modifier = Modifier.height(30.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        if (mac.isEmpty()) {
-            if (isScanning) {
-                CircularProgressIndicator(modifier = Modifier.size(50.dp))
-            }
-            return@Column
+        if (selectedMac == null) {
+            SensorSelectionScreen(
+                sensors = sensors,
+                isScanning = isScanning,
+                onSelectSensor = onSelectSensor
+            )
+        } else {
+            SelectedSensorScreen(
+                selectedName = selectedName ?: "BTHome sensor",
+                selectedMac = selectedMac,
+                temperature = temperature,
+                humidity = humidity,
+                battery = battery,
+                rssi = rssi,
+                onChangeSensor = onChangeSensor
+            )
         }
+    }
+}
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-        ) {
-            Column(
+@Composable
+private fun SensorSelectionScreen(
+    sensors: List<DiscoveredSensor>,
+    isScanning: Boolean,
+    onSelectSensor: (DiscoveredSensor) -> Unit
+) {
+    if (isScanning) {
+        CircularProgressIndicator(modifier = Modifier.size(36.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+
+    Text(
+        text = "Choose a BTHome sensor",
+        fontSize = 20.sp,
+        fontWeight = FontWeight.Medium
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    if (sensors.isEmpty()) {
+        Text(
+            text = "No BTHome transmitters found yet.",
+            color = Color.Gray
+        )
+        return
+    }
+
+    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+        items(
+            items = sensors,
+            key = { sensor -> sensor.mac }
+        ) { sensor ->
+            ListItem(
+                headlineContent = {
+                    Text(sensor.name)
+                },
+                supportingContent = {
+                    Text("${sensor.mac}  •  ${sensor.rssi} dBm")
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
+                    .clickable {
+                        onSelectSensor(sensor)
+                    }
+            )
+
+            HorizontalDivider()
+        }
+    }
+}
+
+@Composable
+private fun SelectedSensorScreen(
+    selectedName: String,
+    selectedMac: String,
+    temperature: Float?,
+    humidity: Float?,
+    battery: Int?,
+    rssi: Int,
+    onChangeSensor: () -> Unit
+) {
+    Text(
+        text = "Selected: $selectedName",
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Medium
+    )
+
+    Text(
+        text = selectedMac,
+        fontSize = 14.sp,
+        color = Color.DarkGray
+    )
+
+    Spacer(modifier = Modifier.height(16.dp))
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = temperature?.let {
+                    String.format(Locale.getDefault(), "%.1f °C", it)
+                } ?: "— °C",
+                fontSize = 58.sp,
+                fontWeight = FontWeight.Black,
+                color = Color(0xFFE91E63)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = humidity?.let {
+                    String.format(Locale.getDefault(), "%.1f %%", it)
+                } ?: "— %",
+                fontSize = 36.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFF2196F3)
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "Signal: $rssi dBm",
+                fontSize = 14.sp,
+                color = Color.DarkGray
+            )
+
+            battery?.let {
                 Text(
-                    text = temperature?.let {
-                        String.format(Locale.getDefault(), "%.1f °C", it)
-                    } ?: "— °C",
-                    fontSize = 58.sp,
-                    fontWeight = FontWeight.Black,
-                    color = Color(0xFFE91E63)
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = humidity?.let {
-                        String.format(Locale.getDefault(), "%.1f %%", it)
-                    } ?: "— %",
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF2196F3)
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                Text(
-                    text = "Sensor: $mac",
+                    text = "Battery: $it %",
                     fontSize = 14.sp,
                     color = Color.DarkGray
                 )
-
-                Text(
-                    text = "Signal: $rssi dBm",
-                    fontSize = 14.sp,
-                    color = Color.DarkGray
-                )
-
-                battery?.let {
-                    Text(
-                        text = "Battery: $it %",
-                        fontSize = 14.sp,
-                        color = Color.DarkGray
-                    )
-                }
             }
         }
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+
+    Button(onClick = onChangeSensor) {
+        Text("Change sensor")
     }
 }
