@@ -51,6 +51,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.glance.appwidget.updateAll
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -105,6 +109,7 @@ class MainActivity : ComponentActivity() {
 
         val bluetoothManager =
             getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+
         bluetoothAdapter = bluetoothManager.adapter
 
         setContent {
@@ -158,8 +163,10 @@ class MainActivity : ComponentActivity() {
 
     private fun hasRequiredPermissions(): Boolean {
         return requiredPermissions().all { permission ->
-            ContextCompat.checkSelfPermission(this, permission) ==
-                PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(
+                this,
+                permission
+            ) == PackageManager.PERMISSION_GRANTED
         }
     }
 
@@ -187,6 +194,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val scanner = adapter.bluetoothLeScanner
+
         if (scanner == null) {
             scanStatus = "BLE scanner is unavailable."
             return
@@ -199,6 +207,7 @@ class MainActivity : ComponentActivity() {
             .build()
 
         isScanning = true
+
         scanStatus = if (selectedMac == null) {
             "Scanning for BTHome sensors. Select one from the list."
         } else {
@@ -216,13 +225,17 @@ class MainActivity : ComponentActivity() {
 
     private val scanCallback = object : ScanCallback() {
 
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
+        override fun onScanResult(
+            callbackType: Int,
+            result: ScanResult
+        ) {
             super.onScanResult(callbackType, result)
 
             val serviceData =
                 result.scanRecord?.getServiceData(bthomeUuid) ?: return
 
             val mac = result.device.address
+
             val name = result.scanRecord?.deviceName
                 ?: result.device.name
                 ?: "BTHome device"
@@ -249,6 +262,7 @@ class MainActivity : ComponentActivity() {
 
             parseBthomeData(
                 macAddress = mac,
+                sensorName = name,
                 signalStrength = result.rssi,
                 payload = serviceData
             )
@@ -256,7 +270,8 @@ class MainActivity : ComponentActivity() {
 
         override fun onScanFailed(errorCode: Int) {
             isScanning = false
-            scanStatus = "BLE scan failed: ${scanErrorName(errorCode)} ($errorCode)"
+            scanStatus =
+                "BLE scan failed: ${scanErrorName(errorCode)} ($errorCode)"
         }
     }
 
@@ -271,7 +286,10 @@ class MainActivity : ComponentActivity() {
             discoveredSensors.add(sensor)
         }
 
-        val sortedSensors = discoveredSensors.sortedByDescending { it.rssi }
+        val sortedSensors = discoveredSensors.sortedByDescending {
+            it.rssi
+        }
+
         discoveredSensors.clear()
         discoveredSensors.addAll(sortedSensors)
     }
@@ -290,6 +308,7 @@ class MainActivity : ComponentActivity() {
         battery = null
         voltage = null
         rssi = 0
+
         lastPayloadHex = "Waiting for BTHome data…"
         diagnosticText = ""
 
@@ -310,6 +329,7 @@ class MainActivity : ComponentActivity() {
         battery = null
         voltage = null
         rssi = 0
+
         lastPayloadHex = "No BTHome packet received yet."
         diagnosticText = ""
 
@@ -320,16 +340,22 @@ class MainActivity : ComponentActivity() {
         return when (errorCode) {
             ScanCallback.SCAN_FAILED_ALREADY_STARTED ->
                 "already started"
+
             ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED ->
                 "app registration failed"
+
             ScanCallback.SCAN_FAILED_INTERNAL_ERROR ->
                 "internal error"
+
             ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED ->
                 "feature unsupported"
+
             ScanCallback.SCAN_FAILED_OUT_OF_HARDWARE_RESOURCES ->
                 "out of hardware resources"
+
             ScanCallback.SCAN_FAILED_SCANNING_TOO_FREQUENTLY ->
                 "scanning too frequently"
+
             else ->
                 "unknown error"
         }
@@ -337,6 +363,7 @@ class MainActivity : ComponentActivity() {
 
     private fun parseBthomeData(
         macAddress: String,
+        sensorName: String,
         signalStrength: Int,
         payload: ByteArray
     ) {
@@ -347,7 +374,11 @@ class MainActivity : ComponentActivity() {
         }
 
         lastPayloadHex = payloadHex
-        Log.d(LOG_TAG, "BTHome from $macAddress: $payloadHex")
+
+        Log.d(
+            LOG_TAG,
+            "BTHome from $macAddress ($sensorName): $payloadHex"
+        )
 
         val deviceInfo = payload[0].toInt() and 0xFF
         val encrypted = (deviceInfo and 0x01) != 0
@@ -366,6 +397,7 @@ class MainActivity : ComponentActivity() {
         }
 
         var index = 1
+
         var parsedTemperature: Float? = null
         var parsedHumidity: Float? = null
         var parsedBattery: Int? = null
@@ -382,6 +414,7 @@ class MainActivity : ComponentActivity() {
                         diagnosticText = "Truncated packet ID field."
                         break
                     }
+
                     index += 1
                 }
 
@@ -390,6 +423,7 @@ class MainActivity : ComponentActivity() {
                         diagnosticText = "Truncated battery field."
                         break
                     }
+
                     parsedBattery = payload[index].toInt() and 0xFF
                     index += 1
                 }
@@ -438,6 +472,7 @@ class MainActivity : ComponentActivity() {
 
                 else -> {
                     unknownObjectId = objectId
+
                     diagnosticText =
                         "Unsupported BTHome object: 0x%02X".format(objectId)
 
@@ -446,6 +481,7 @@ class MainActivity : ComponentActivity() {
                         "Unsupported BTHome object: 0x%02X; payload: %s"
                             .format(objectId, payloadHex)
                     )
+
                     break
                 }
             }
@@ -464,12 +500,18 @@ class MainActivity : ComponentActivity() {
 
         if (parsedTemperature != null || parsedHumidity != null) {
             diagnosticText = if (unknownObjectId != null) {
-                "Data decoded; packet also has 0x%02X.".format(unknownObjectId)
+                "Data decoded; packet also has 0x%02X."
+                    .format(unknownObjectId)
             } else {
                 "BTHome v2 decoded successfully."
             }
 
             scanStatus = "Fresh data received from selected sensor."
+
+            saveWidgetDataAndRefresh(
+                sensorName = sensorName,
+                macAddress = macAddress
+            )
 
             logToFile(
                 mac = macAddress,
@@ -485,6 +527,63 @@ class MainActivity : ComponentActivity() {
         } else {
             diagnosticText = "No temperature or humidity fields in this packet."
             scanStatus = diagnosticText
+        }
+    }
+
+    private fun saveWidgetDataAndRefresh(
+        sensorName: String,
+        macAddress: String
+    ) {
+        val widgetPreferences = getSharedPreferences(
+            WIDGET_PREFS_NAME,
+            Context.MODE_PRIVATE
+        )
+
+        val firstMac = widgetPreferences.getString(
+            "first_mac",
+            ""
+        ) ?: ""
+
+        val secondMac = widgetPreferences.getString(
+            "second_mac",
+            ""
+        ) ?: ""
+
+        /*
+         * Логика двух слотов:
+         *
+         * 1. Если первый слот свободен или содержит этот же MAC — обновляем first.
+         * 2. Если второй свободен или содержит этот же MAC — обновляем second.
+         * 3. Если оба заняты другими датчиками — заменяем second текущим.
+         *
+         * Пока приложение читает только выбранный датчик, фактически будет
+         * обновляться один слот. Второй начнёт заполняться после расширения
+         * scanner до двух закреплённых MAC.
+         */
+        val prefix = when {
+            firstMac.isEmpty() || firstMac.equals(macAddress, ignoreCase = true) ->
+                "first"
+
+            secondMac.isEmpty() || secondMac.equals(macAddress, ignoreCase = true) ->
+                "second"
+
+            else ->
+                "second"
+        }
+
+        widgetPreferences.edit()
+            .putString("${prefix}_name", sensorName)
+            .putString("${prefix}_mac", macAddress)
+            .putFloat("${prefix}_temperature", temperature ?: 0f)
+            .putFloat("${prefix}_humidity", humidity ?: 0f)
+            .putFloat("${prefix}_voltage", voltage ?: 0f)
+            .putInt("${prefix}_battery", battery ?: 0)
+            .putInt("${prefix}_rssi", rssi)
+            .putLong("${prefix}_last_seen", System.currentTimeMillis())
+            .apply()
+
+        CoroutineScope(Dispatchers.IO).launch {
+            Bt2hWidget().updateAll(this@MainActivity)
         }
     }
 
@@ -544,6 +643,8 @@ class MainActivity : ComponentActivity() {
         private const val PREFS_NAME = "bt2h_logger_settings"
         private const val KEY_SELECTED_MAC = "selected_sensor_mac"
         private const val KEY_SELECTED_NAME = "selected_sensor_name"
+
+        private const val WIDGET_PREFS_NAME = "bt2h_widget_data"
     }
 }
 
@@ -618,7 +719,10 @@ private fun SensorSelectionScreen(
     onSelectSensor: (DiscoveredSensor) -> Unit
 ) {
     if (isScanning) {
-        CircularProgressIndicator(modifier = Modifier.size(36.dp))
+        CircularProgressIndicator(
+            modifier = Modifier.size(36.dp)
+        )
+
         Spacer(modifier = Modifier.height(16.dp))
     }
 
@@ -635,6 +739,7 @@ private fun SensorSelectionScreen(
             text = "No BTHome transmitters found yet.",
             color = Color.Gray
         )
+
         return
     }
 
