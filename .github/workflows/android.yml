@@ -1,0 +1,31 @@
+name: Build My App
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      
+    - name: Set up Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+        
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-version: '8.5'
+        
+    - name: Compile and Build APK
+      run: gradle assembleDebug --no-daemon
+      
+    - name: Upload my App
+      uses: actions/upload-artifact@v4
+      with:
+        name: Mijia-Bluetooth-App
+        path: app/build/outputs/apk/debug/app-debug.apk
