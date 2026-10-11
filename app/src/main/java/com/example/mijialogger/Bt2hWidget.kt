@@ -3,6 +3,7 @@ package com.example.mijialogger
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.action.actionStartActivity
@@ -28,6 +29,8 @@ import androidx.glance.unit.dp
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private const val WIDGET_PREFS_NAME = "bt2h_widget_data"
 
 class Bt2hWidget : GlanceAppWidget() {
 
@@ -65,14 +68,14 @@ private fun Bt2hWidgetContent(context: Context) {
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
-            .background(ColorProvider(0xFFF9F7FA))
+            .background(ColorProvider(Color(0xFFF9F7FA)))
             .padding(12.dp)
             .clickable(actionStartActivity<MainActivity>())
     ) {
         Text(
             text = "BT2H Logger",
             style = TextStyle(
-                color = ColorProvider(0xFF1E1E23),
+                color = ColorProvider(Color(0xFF1E1E23)),
                 fontWeight = FontWeight.Bold
             )
         )
@@ -98,9 +101,9 @@ private fun WidgetSensorRow(
     defaultTitle: String,
     sensor: WidgetSensorData
 ) {
-    val titleColor = ColorProvider(0xFF46464E)
-    val mainColor = ColorProvider(0xFF141419)
-    val mutedColor = ColorProvider(0xFF6E6E78)
+    val titleColor = ColorProvider(Color(0xFF46464E))
+    val mainColor = ColorProvider(Color(0xFF141419))
+    val mutedColor = ColorProvider(Color(0xFF6E6E78))
 
     Column(
         modifier = GlanceModifier.fillMaxWidth()
@@ -184,7 +187,9 @@ private data class WidgetSensorData(
         get() = lastSeenMillis > 0L
 
     fun lastSeenText(): String {
-        if (!hasData) return "never"
+        if (!hasData) {
+            return "never"
+        }
 
         val ageSeconds = (
             (System.currentTimeMillis() - lastSeenMillis) / 1000L
@@ -207,8 +212,14 @@ private data class WidgetSensorData(
             prefix: String
         ): WidgetSensorData {
             return WidgetSensorData(
-                name = preferences.getString("${prefix}_name", "") ?: "",
-                mac = preferences.getString("${prefix}_mac", "") ?: "",
+                name = preferences.getString(
+                    "${prefix}_name",
+                    ""
+                ) ?: "",
+                mac = preferences.getString(
+                    "${prefix}_mac",
+                    ""
+                ) ?: "",
                 temperature = preferences.getFloat(
                     "${prefix}_temperature",
                     0f
@@ -217,4 +228,23 @@ private data class WidgetSensorData(
                     "${prefix}_humidity",
                     0f
                 ),
-                voltage = preferences.getFl
+                voltage = preferences.getFloat(
+                    "${prefix}_voltage",
+                    0f
+                ),
+                battery = preferences.getInt(
+                    "${prefix}_battery",
+                    0
+                ),
+                rssi = preferences.getInt(
+                    "${prefix}_rssi",
+                    0
+                ),
+                lastSeenMillis = preferences.getLong(
+                    "${prefix}_last_seen",
+                    0L
+                )
+            )
+        }
+    }
+}
