@@ -1,8 +1,7 @@
 package com.example.mijialogger
 
 import android.content.Context
-import android.content.Intent
-import android.graphics.Color
+import android.content.SharedPreferences
 import androidx.compose.runtime.Composable
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
@@ -10,6 +9,7 @@ import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
@@ -48,28 +48,31 @@ class Bt2hWidgetReceiver : GlanceAppWidgetReceiver() {
 @Composable
 private fun Bt2hWidgetContent(context: Context) {
     val preferences = context.getSharedPreferences(
-        "bt2h_widget_data",
+        WIDGET_PREFS_NAME,
         Context.MODE_PRIVATE
     )
 
-    val first = WidgetSensorData.fromPreferences(preferences, "first")
-    val second = WidgetSensorData.fromPreferences(preferences, "second")
+    val firstSensor = WidgetSensorData.fromPreferences(
+        preferences = preferences,
+        prefix = "first"
+    )
 
-    val openAppIntent = Intent(context, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
+    val secondSensor = WidgetSensorData.fromPreferences(
+        preferences = preferences,
+        prefix = "second"
+    )
 
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
-            .background(ColorProvider(Color.rgb(249, 247, 250)))
+            .background(ColorProvider(0xFFF9F7FA))
             .padding(12.dp)
-            .clickable(actionStartActivity(openAppIntent))
+            .clickable(actionStartActivity<MainActivity>())
     ) {
         Text(
             text = "BT2H Logger",
             style = TextStyle(
-                color = ColorProvider(Color.rgb(30, 30, 35)),
+                color = ColorProvider(0xFF1E1E23),
                 fontWeight = FontWeight.Bold
             )
         )
@@ -77,97 +80,115 @@ private fun Bt2hWidgetContent(context: Context) {
         Spacer(modifier = GlanceModifier.height(8.dp))
 
         WidgetSensorRow(
-            title = "Sensor 1",
-            sensor = first
+            defaultTitle = "Sensor 1",
+            sensor = firstSensor
         )
 
         Spacer(modifier = GlanceModifier.height(8.dp))
 
         WidgetSensorRow(
-            title = "Sensor 2",
-            sensor = second
+            defaultTitle = "Sensor 2",
+            sensor = secondSensor
         )
     }
 }
 
 @Composable
 private fun WidgetSensorRow(
-    title: String,
+    defaultTitle: String,
     sensor: WidgetSensorData
 ) {
-    val titleColor = ColorProvider(Color.rgb(70, 70, 78))
-    val mainColor = ColorProvider(Color.rgb(20, 20, 25))
-    val mutedColor = ColorProvider(Color.rgb(110, 110, 120))
+    val titleColor = ColorProvider(0xFF46464E)
+    val mainColor = ColorProvider(0xFF141419)
+    val mutedColor = ColorProvider(0xFF6E6E78)
 
     Column(
         modifier = GlanceModifier.fillMaxWidth()
     ) {
         Text(
-            text = if (sensor.name.isNotEmpty()) sensor.name else title,
+            text = if (sensor.name.isNotBlank()) {
+                sensor.name
+            } else {
+                defaultTitle
+            },
             style = TextStyle(
                 color = titleColor,
                 fontWeight = FontWeight.Bold
             )
         )
 
-        if (!sensor.hasData) {
+        if (sensor.hasData) {
+            Row(
+                modifier = GlanceModifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = String.format(
+                        Locale.getDefault(),
+                        "%.1f °C",
+                        sensor.temperature
+                    ),
+                    style = TextStyle(
+                        color = mainColor,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+
+                Spacer(modifier = GlanceModifier.width(12.dp))
+
+                Text(
+                    text = String.format(
+                        Locale.getDefault(),
+                        "%.1f %%",
+                        sensor.humidity
+                    ),
+                    style = TextStyle(color = mainColor)
+                )
+
+                Spacer(modifier = GlanceModifier.width(12.dp))
+
+                Text(
+                    text = String.format(
+                        Locale.getDefault(),
+                        "%.3f V",
+                        sensor.voltage
+                    ),
+                    style = TextStyle(color = mainColor)
+                )
+            }
+
+            Text(
+                text = "Updated ${sensor.lastSeenText()} · ${sensor.rssi} dBm",
+                style = TextStyle(color = mutedColor)
+            )
+        } else {
             Text(
                 text = "No data received yet",
                 style = TextStyle(color = mutedColor)
             )
-            return
         }
-
-        Row(
-            modifier = GlanceModifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = String.format(Locale.getDefault(), "%.1f °C", sensor.temperature),
-                style = TextStyle(
-                    color = mainColor,
-                    fontWeight = FontWeight.Bold
-                )
-            )
-
-            Spacer(modifier = GlanceModifier.width(12.dp))
-
-            Text(
-                text = String.format(Locale.getDefault(), "%.1f %%", sensor.humidity),
-                style = TextStyle(color = mainColor)
-            )
-
-            Spacer(modifier = GlanceModifier.width(12.dp))
-
-            Text(
-                text = String.format(Locale.getDefault(), "%.3f V", sensor.voltage),
-                style = TextStyle(color = mainColor)
-            )
-        }
-
-        Text(
-            text = "Updated ${sensor.lastSeenText()} · ${sensor.rssi} dBm",
-            style = TextStyle(color = mutedColor)
-        )
     }
 }
 
 private data class WidgetSensorData(
     val name: String,
+    val mac: String,
     val temperature: Float,
     val humidity: Float,
     val voltage: Float,
+    val battery: Int,
     val rssi: Int,
     val lastSeenMillis: Long
 ) {
     val hasData: Boolean
-        get() = lastSeenMillis > 0
+        get() = lastSeenMillis > 0L
 
     fun lastSeenText(): String {
-        if (lastSeenMillis <= 0L) return "never"
+        if (!hasData) return "never"
 
-        val now = System.currentTimeMillis()
-        val ageSeconds = ((now - lastSeenMillis) / 1000L).coerceAtLeast(0L)
+        val ageSeconds = (
+            (System.currentTimeMillis() - lastSeenMillis) / 1000L
+        ).coerceAtLeast(0L)
 
         return when {
             ageSeconds < 60L -> "${ageSeconds}s ago"
@@ -182,17 +203,18 @@ private data class WidgetSensorData(
 
     companion object {
         fun fromPreferences(
-            preferences: android.content.SharedPreferences,
+            preferences: SharedPreferences,
             prefix: String
         ): WidgetSensorData {
             return WidgetSensorData(
                 name = preferences.getString("${prefix}_name", "") ?: "",
-                temperature = preferences.getFloat("${prefix}_temperature", 0f),
-                humidity = preferences.getFloat("${prefix}_humidity", 0f),
-                voltage = preferences.getFloat("${prefix}_voltage", 0f),
-                rssi = preferences.getInt("${prefix}_rssi", 0),
-                lastSeenMillis = preferences.getLong("${prefix}_last_seen", 0L)
-            )
-        }
-    }
-}
+                mac = preferences.getString("${prefix}_mac", "") ?: "",
+                temperature = preferences.getFloat(
+                    "${prefix}_temperature",
+                    0f
+                ),
+                humidity = preferences.getFloat(
+                    "${prefix}_humidity",
+                    0f
+                ),
+                voltage = preferences.getFl
