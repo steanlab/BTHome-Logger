@@ -1,4 +1,4 @@
-name: Build BTHomeV2 Logger
+name: Build BTHome Logger
 
 on:
   push:
@@ -27,11 +27,11 @@ jobs:
         run: gradle assembleDebug --no-daemon
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk BTHomeV2-Logger.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk BTHome-Logger.apk
 
-      - name: Upload BTHomeV2 Logger APK
+      - name: Upload BTHome Logger APK
         uses: actions/upload-artifact@v6
         with:
-          name: BTHomeV2 Logger
-          path: BTHomeV2-Logger.apk
+          name: BTHome Logger
+          path: BTHome-Logger.apk
           if-no-files-found: error

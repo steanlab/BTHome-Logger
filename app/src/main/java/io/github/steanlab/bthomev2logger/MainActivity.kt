@@ -63,7 +63,8 @@ import java.util.Locale
 data class DiscoveredSensor(
     val mac: String,
     val name: String,
-    val rssi: Int
+    val rssi: Int,
+    val bthomeVersion: Int
 )
 
 class MainActivity : ComponentActivity() {
@@ -85,7 +86,10 @@ class MainActivity : ComponentActivity() {
 
     private val discoveredSensors = mutableStateListOf<DiscoveredSensor>()
 
-    private val bthomeUuid =
+    private val bthomeV1Uuid =
+        ParcelUuid.fromString("0000181C-0000-1000-8000-00805F9B34FB")
+
+    private val bthomeV2Uuid =
         ParcelUuid.fromString("0000FCD2-0000-1000-8000-00805F9B34FB")
 
     private var bluetoothAdapter: BluetoothAdapter? = null
@@ -209,7 +213,7 @@ class MainActivity : ComponentActivity() {
         isScanning = true
 
         scanStatus = if (selectedMac == null) {
-            "Scanning for BTHome sensors. Select one from the list."
+            "Scanning for unencrypted BTHome v1 and v2 sensors. Select one."
         } else {
             "Looking for selected sensor: $selectedMac"
         }
@@ -231,20 +235,44 @@ class MainActivity : ComponentActivity() {
         ) {
             super.onScanResult(callbackType, result)
 
-            val serviceData =
-                result.scanRecord?.getServiceData(bthomeUuid) ?: return
+            val scanRecord = result.scanRecord ?: return
+
+            val v1Payload = scanRecord.getServiceData(bthomeV1Uuid)
+            val v2Payload = scanRecord.getServiceData(bthomeV2Uuid)
+
+            val bthomeVersion: Int
+            val payload: ByteArray
+
+            when {
+                v1Payload != null -> {
+                    bthomeVersion = 1
+                    payload = v1Payload
+                }
+
+                v2Payload != null &&
+                        v2Payload.isNotEmpty() &&
+                        (v2Payload[0].toInt() and 0x01) == 0 -> {
+                    bthomeVersion = 2
+                    payload = v2Payload
+                }
+
+                else -> {
+                    return
+                }
+            }
 
             val mac = result.device.address
 
-            val name = result.scanRecord?.deviceName
+            val name = scanRecord.deviceName
                 ?: result.device.name
-                ?: "BTHome device"
+                ?: "BTHome v$bthomeVersion sensor"
 
             addOrUpdateSensor(
                 DiscoveredSensor(
                     mac = mac,
                     name = name,
-                    rssi = result.rssi
+                    rssi = result.rssi,
+                    bthomeVersion = bthomeVersion
                 )
             )
 
@@ -252,7 +280,7 @@ class MainActivity : ComponentActivity() {
 
             if (chosenMac == null) {
                 scanStatus =
-                    "Found ${discoveredSensors.size} BTHome sensor(s). Select one."
+                    "Found ${discoveredSensors.size} unencrypted BTHome sensor(s). Select one."
                 return
             }
 
@@ -261,10 +289,11 @@ class MainActivity : ComponentActivity() {
             }
 
             parseBthomeData(
+                bthomeVersion = bthomeVersion,
                 macAddress = mac,
                 sensorName = name,
                 signalStrength = result.rssi,
-                payload = serviceData
+                payload = payload
             )
         }
 
@@ -309,7 +338,7 @@ class MainActivity : ComponentActivity() {
         voltage = null
         rssi = 0
 
-        lastPayloadHex = "Waiting for BTHome data…"
+        lastPayloadHex = "Waiting for unencrypted BTHome data…"
         diagnosticText = ""
 
         scanStatus = "Selected: ${sensor.name} (${sensor.mac})"
@@ -333,7 +362,8 @@ class MainActivity : ComponentActivity() {
         lastPayloadHex = "No BTHome packet received yet."
         diagnosticText = ""
 
-        scanStatus = "Scanning for BTHome sensors. Select one from the list."
+        scanStatus =
+            "Scanning for unencrypted BTHome v1 and v2 sensors. Select one."
     }
 
     private fun scanErrorName(errorCode: Int): String {
@@ -362,22 +392,150 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun parseBthomeData(
+        bthomeVersion: Int,
         macAddress: String,
         sensorName: String,
         signalStrength: Int,
         payload: ByteArray
     ) {
-        if (payload.isEmpty()) return
-
-        val payloadHex = payload.joinToString(" ") {
-            "%02X".format(it.toInt() and 0xFF)
+        if (payload.isEmpty()) {
+            return
         }
+
+        when (bthomeVersion) {
+            1 -> parseBthomeV1Data(
+                macAddress = macAddress,
+                sensorName = sensorName,
+                signalStrength = signalStrength,
+                payload = payload
+            )
+
+            2 -> parseBthomeV2Data(
+                macAddress = macAddress,
+                sensorName = sensorName,
+                signalStrength = signalStrength,
+                payload = payload
+            )
+        }
+    }
+
+    private fun parseBthomeV1Data(
+        macAddress: String,
+        sensorName: String,
+        signalStrength: Int,
+        payload: ByteArray
+    ) {
+        val payloadHex = payload.toHexString()
 
         lastPayloadHex = payloadHex
 
         Log.d(
             LOG_TAG,
-            "BTHome from $macAddress ($sensorName): $payloadHex"
+            "BTHome v1 from $macAddress ($sensorName): $payloadHex"
+        )
+
+        var index = 0
+
+        var parsedTemperature: Float? = null
+        var parsedHumidity: Float? = null
+        var parsedBattery: Int? = null
+        var parsedVoltage: Float? = null
+        var unknownObjectId: Int? = null
+        var diagnostic: String? = null
+
+        while (index < payload.size) {
+            val objectId = payload[index].toInt() and 0xFF
+            index += 1
+
+            when (objectId) {
+                0x01 -> {
+                    if (!hasBytes(payload, index, 1)) {
+                        diagnostic = "Truncated BTHome v1 battery field."
+                        break
+                    }
+
+                    parsedBattery = payload[index].toInt() and 0xFF
+                    index += 1
+                }
+
+                0x02 -> {
+                    if (!hasBytes(payload, index, 2)) {
+                        diagnostic = "Truncated BTHome v1 temperature field."
+                        break
+                    }
+
+                    parsedTemperature = readSignedInt16Le(payload, index) * 0.01f
+                    index += 2
+                }
+
+                0x03 -> {
+                    if (!hasBytes(payload, index, 2)) {
+                        diagnostic = "Truncated BTHome v1 humidity field."
+                        break
+                    }
+
+                    parsedHumidity = readUnsignedInt16Le(payload, index) * 0.01f
+                    index += 2
+                }
+
+                0x0C -> {
+                    if (!hasBytes(payload, index, 2)) {
+                        diagnostic = "Truncated BTHome v1 voltage field."
+                        break
+                    }
+
+                    parsedVoltage = readUnsignedInt16Le(payload, index) * 0.001f
+                    index += 2
+                }
+
+                else -> {
+                    unknownObjectId = objectId
+                    diagnostic =
+                        "Unsupported BTHome v1 object: 0x%02X".format(objectId)
+
+                    Log.w(
+                        LOG_TAG,
+                        "Unsupported BTHome v1 object: 0x%02X; payload: %s"
+                            .format(objectId, payloadHex)
+                    )
+
+                    break
+                }
+            }
+
+            if (unknownObjectId != null || diagnostic != null) {
+                break
+            }
+        }
+
+        finishDecodedPacket(
+            bthomeVersion = 1,
+            macAddress = macAddress,
+            sensorName = sensorName,
+            signalStrength = signalStrength,
+            payloadHex = payloadHex,
+            parsedTemperature = parsedTemperature,
+            parsedHumidity = parsedHumidity,
+            parsedBattery = parsedBattery,
+            parsedVoltage = parsedVoltage,
+            unknownObjectId = unknownObjectId,
+            parserDiagnostic = diagnostic
+        )
+    }
+
+    private fun parseBthomeV2Data(
+        macAddress: String,
+        sensorName: String,
+        signalStrength: Int,
+        payload: ByteArray
+    ) {
+        val payloadHex = payload.toHexString()
+
+        lastPayloadHex = payloadHex
+
+        Log.d(
+            LOG_TAG,
+            "BTHome v2 from $macAddress ($sensorName): $payloadHex"
         )
 
         val deviceInfo = payload[0].toInt() and 0xFF
@@ -391,8 +549,6 @@ class MainActivity : ComponentActivity() {
         }
 
         if (encrypted) {
-            diagnosticText = "Encrypted BTHome v2 packet."
-            scanStatus = "Selected sensor uses encrypted BTHome packets."
             return
         }
 
@@ -403,6 +559,7 @@ class MainActivity : ComponentActivity() {
         var parsedBattery: Int? = null
         var parsedVoltage: Float? = null
         var unknownObjectId: Int? = null
+        var diagnostic: String? = null
 
         while (index < payload.size) {
             val objectId = payload[index].toInt() and 0xFF
@@ -410,8 +567,8 @@ class MainActivity : ComponentActivity() {
 
             when (objectId) {
                 0x00 -> {
-                    if (index >= payload.size) {
-                        diagnosticText = "Truncated packet ID field."
+                    if (!hasBytes(payload, index, 1)) {
+                        diagnostic = "Truncated BTHome v2 ID field."
                         break
                     }
 
@@ -419,8 +576,8 @@ class MainActivity : ComponentActivity() {
                 }
 
                 0x01 -> {
-                    if (index >= payload.size) {
-                        diagnosticText = "Truncated battery field."
+                    if (!hasBytes(payload, index, 1)) {
+                        diagnostic = "Truncated BTHome v2 battery field."
                         break
                     }
 
@@ -429,56 +586,43 @@ class MainActivity : ComponentActivity() {
                 }
 
                 0x02 -> {
-                    if (index + 1 >= payload.size) {
-                        diagnosticText = "Truncated temperature field."
+                    if (!hasBytes(payload, index, 2)) {
+                        diagnostic = "Truncated BTHome v2 temperature field."
                         break
                     }
 
-                    val low = payload[index].toInt() and 0xFF
-                    val high = payload[index + 1].toInt() and 0xFF
-                    val rawTemperature = ((high shl 8) or low).toShort()
-
-                    parsedTemperature = rawTemperature * 0.01f
+                    parsedTemperature = readSignedInt16Le(payload, index) * 0.01f
                     index += 2
                 }
 
                 0x03 -> {
-                    if (index + 1 >= payload.size) {
-                        diagnosticText = "Truncated humidity field."
+                    if (!hasBytes(payload, index, 2)) {
+                        diagnostic = "Truncated BTHome v2 humidity field."
                         break
                     }
 
-                    val low = payload[index].toInt() and 0xFF
-                    val high = payload[index + 1].toInt() and 0xFF
-                    val rawHumidity = (high shl 8) or low
-
-                    parsedHumidity = rawHumidity * 0.01f
+                    parsedHumidity = readUnsignedInt16Le(payload, index) * 0.01f
                     index += 2
                 }
 
                 0x0C -> {
-                    if (index + 1 >= payload.size) {
-                        diagnosticText = "Truncated voltage field."
+                    if (!hasBytes(payload, index, 2)) {
+                        diagnostic = "Truncated BTHome v2 voltage field."
                         break
                     }
 
-                    val low = payload[index].toInt() and 0xFF
-                    val high = payload[index + 1].toInt() and 0xFF
-                    val rawVoltage = (high shl 8) or low
-
-                    parsedVoltage = rawVoltage * 0.001f
+                    parsedVoltage = readUnsignedInt16Le(payload, index) * 0.001f
                     index += 2
                 }
 
                 else -> {
                     unknownObjectId = objectId
-
-                    diagnosticText =
-                        "Unsupported BTHome object: 0x%02X".format(objectId)
+                    diagnostic =
+                        "Unsupported BTHome v2 object: 0x%02X".format(objectId)
 
                     Log.w(
                         LOG_TAG,
-                        "Unsupported BTHome object: 0x%02X; payload: %s"
+                        "Unsupported BTHome v2 object: 0x%02X; payload: %s"
                             .format(objectId, payloadHex)
                     )
 
@@ -486,11 +630,39 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            if (unknownObjectId != null) {
+            if (unknownObjectId != null || diagnostic != null) {
                 break
             }
         }
 
+        finishDecodedPacket(
+            bthomeVersion = 2,
+            macAddress = macAddress,
+            sensorName = sensorName,
+            signalStrength = signalStrength,
+            payloadHex = payloadHex,
+            parsedTemperature = parsedTemperature,
+            parsedHumidity = parsedHumidity,
+            parsedBattery = parsedBattery,
+            parsedVoltage = parsedVoltage,
+            unknownObjectId = unknownObjectId,
+            parserDiagnostic = diagnostic
+        )
+    }
+
+    private fun finishDecodedPacket(
+        bthomeVersion: Int,
+        macAddress: String,
+        sensorName: String,
+        signalStrength: Int,
+        payloadHex: String,
+        parsedTemperature: Float?,
+        parsedHumidity: Float?,
+        parsedBattery: Int?,
+        parsedVoltage: Float?,
+        unknownObjectId: Int?,
+        parserDiagnostic: String?
+    ) {
         rssi = signalStrength
 
         parsedTemperature?.let { temperature = it }
@@ -498,12 +670,23 @@ class MainActivity : ComponentActivity() {
         parsedBattery?.let { battery = it }
         parsedVoltage?.let { voltage = it }
 
-        if (parsedTemperature != null || parsedHumidity != null) {
-            diagnosticText = if (unknownObjectId != null) {
-                "Data decoded; packet also has 0x%02X."
-                    .format(unknownObjectId)
-            } else {
-                "BTHome v2 decoded successfully."
+        val hasSupportedReading =
+            parsedTemperature != null ||
+                    parsedHumidity != null ||
+                    parsedBattery != null ||
+                    parsedVoltage != null
+
+        if (hasSupportedReading) {
+            diagnosticText = when {
+                unknownObjectId != null ->
+                    "BTHome v$bthomeVersion decoded; packet also has 0x%02X."
+                        .format(unknownObjectId)
+
+                parserDiagnostic != null ->
+                    "BTHome v$bthomeVersion decoded; $parserDiagnostic"
+
+                else ->
+                    "Unencrypted BTHome v$bthomeVersion decoded successfully."
             }
 
             scanStatus = "Fresh data received from selected sensor."
@@ -514,6 +697,7 @@ class MainActivity : ComponentActivity() {
             )
 
             logToFile(
+                bthomeVersion = bthomeVersion,
                 mac = macAddress,
                 temp = parsedTemperature,
                 hum = parsedHumidity,
@@ -522,11 +706,49 @@ class MainActivity : ComponentActivity() {
                 signalStrength = signalStrength,
                 payloadHex = payloadHex
             )
+        } else if (parserDiagnostic != null) {
+            diagnosticText = parserDiagnostic
+            scanStatus = diagnosticText
         } else if (unknownObjectId != null) {
+            diagnosticText =
+                "Unsupported BTHome v$bthomeVersion object: 0x%02X"
+                    .format(unknownObjectId)
             scanStatus = diagnosticText
         } else {
-            diagnosticText = "No temperature or humidity fields in this packet."
+            diagnosticText =
+                "No supported sensor fields in this BTHome v$bthomeVersion packet."
             scanStatus = diagnosticText
+        }
+    }
+
+    private fun hasBytes(
+        payload: ByteArray,
+        startIndex: Int,
+        count: Int
+    ): Boolean {
+        return startIndex >= 0 && count >= 0 && startIndex + count <= payload.size
+    }
+
+    private fun readUnsignedInt16Le(
+        payload: ByteArray,
+        index: Int
+    ): Int {
+        val low = payload[index].toInt() and 0xFF
+        val high = payload[index + 1].toInt() and 0xFF
+
+        return (high shl 8) or low
+    }
+
+    private fun readSignedInt16Le(
+        payload: ByteArray,
+        index: Int
+    ): Int {
+        return readUnsignedInt16Le(payload, index).toShort().toInt()
+    }
+
+    private fun ByteArray.toHexString(): String {
+        return joinToString(" ") {
+            "%02X".format(it.toInt() and 0xFF)
         }
     }
 
@@ -549,17 +771,6 @@ class MainActivity : ComponentActivity() {
             ""
         ) ?: ""
 
-        /*
-         * Логика двух слотов:
-         *
-         * 1. Если первый слот свободен или содержит этот же MAC — обновляем first.
-         * 2. Если второй свободен или содержит этот же MAC — обновляем second.
-         * 3. Если оба заняты другими датчиками — заменяем second текущим.
-         *
-         * Пока приложение читает только выбранный датчик, фактически будет
-         * обновляться один слот. Второй начнёт заполняться после расширения
-         * scanner до двух закреплённых MAC.
-         */
         val prefix = when {
             firstMac.isEmpty() || firstMac.equals(macAddress, ignoreCase = true) ->
                 "first"
@@ -588,6 +799,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun logToFile(
+        bthomeVersion: Int,
         mac: String,
         temp: Float?,
         hum: Float?,
@@ -624,10 +836,10 @@ class MainActivity : ComponentActivity() {
             } ?: "n/a"
 
             val line =
-                "[$timestamp] MAC: $mac | Temp: $temperatureText | " +
-                    "Humidity: $humidityText | Battery: $batteryText | " +
-                    "Voltage: $voltageText | RSSI: $signalStrength dBm | " +
-                    "Payload: $payloadHex\n"
+                "[$timestamp] BTHome v$bthomeVersion | MAC: $mac | " +
+                        "Temp: $temperatureText | Humidity: $humidityText | " +
+                        "Battery: $batteryText | Voltage: $voltageText | " +
+                        "RSSI: $signalStrength dBm | Payload: $payloadHex\n"
 
             logFile.appendText(line)
             Log.d(LOG_TAG, "Saved: $line")
@@ -638,13 +850,13 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val LOG_TAG = "BT2HLogger"
+        private const val LOG_TAG = "BTHomeLogger"
 
-        private const val PREFS_NAME = "bt2h_logger_settings"
+        private const val PREFS_NAME = "bthome_logger_settings"
         private const val KEY_SELECTED_MAC = "selected_sensor_mac"
         private const val KEY_SELECTED_NAME = "selected_sensor_name"
 
-        private const val WIDGET_PREFS_NAME = "bt2h_widget_data"
+        private const val WIDGET_PREFS_NAME = "bthome_widget_data"
     }
 }
 
@@ -674,7 +886,7 @@ private fun LoggerScreen(
         Spacer(modifier = Modifier.height(20.dp))
 
         Text(
-            text = "BTHomeV2 Logger",
+            text = "BTHome Logger",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold
         )
@@ -727,7 +939,7 @@ private fun SensorSelectionScreen(
     }
 
     Text(
-        text = "Choose a BTHome sensor",
+        text = "Choose an unencrypted BTHome sensor",
         fontSize = 20.sp,
         fontWeight = FontWeight.Medium
     )
@@ -736,7 +948,7 @@ private fun SensorSelectionScreen(
 
     if (sensors.isEmpty()) {
         Text(
-            text = "No BTHome transmitters found yet.",
+            text = "No unencrypted BTHome v1 or v2 transmitters found yet.",
             color = Color.Gray
         )
 
@@ -753,7 +965,10 @@ private fun SensorSelectionScreen(
                     Text(sensor.name)
                 },
                 supportingContent = {
-                    Text("${sensor.mac}  •  ${sensor.rssi} dBm")
+                    Text(
+                        "BTHome v${sensor.bthomeVersion}  •  " +
+                                "${sensor.mac}  •  ${sensor.rssi} dBm"
+                    )
                 },
                 modifier = Modifier
                     .fillMaxWidth()

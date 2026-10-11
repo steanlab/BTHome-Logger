@@ -37,7 +37,7 @@
     <receiver
         android:name=".Bt2hWidgetReceiver"
         android:exported="true"
-        android:label="BTHomeV2 Logger">
+        android:label="BTHome Logger">
 
     <intent-filter>
         <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />

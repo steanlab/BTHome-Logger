@@ -1,1 +1,1 @@
-Read BTHome v2 BLE temperature and humidity sensors locally
+Scan and log unencrypted BTHome v1 and v2 BLE sensor data locally

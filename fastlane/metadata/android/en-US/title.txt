@@ -1,1 +1,1 @@
-BTHomeV2 Logger
+BTHome Logger
