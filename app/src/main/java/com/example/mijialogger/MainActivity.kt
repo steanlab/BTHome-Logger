@@ -1,4 +1,4 @@
-package com.example.mijialogger
+package io.github.steanlab.bthomev2logger
 
 import android.Manifest
 import android.annotation.SuppressLint
