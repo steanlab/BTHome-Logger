@@ -1,4 +1,4 @@
-package com.example.mijialogger
+package io.github.steanlab.bthomev2logger
 
 import android.content.Context
 import android.content.SharedPreferences
