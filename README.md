@@ -266,3 +266,7 @@ BTHomeV2 Logger is designed to operate locally.
 - CSV export.
 - Share/export local logs.
 - Support for additional
+
+## Author
+
+Created and maintained by **Siarhei Besarab** ([@steanlab](https://github.com/steanlab)), 2026.
