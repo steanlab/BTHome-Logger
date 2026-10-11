@@ -73,7 +73,7 @@ private fun Bt2hWidgetContent(context: Context) {
             .clickable(actionStartActivity<MainActivity>())
     ) {
         Text(
-            text = "BT2H Logger",
+            text = "BTHomeV2 Logger",
             style = TextStyle(
                 color = ColorProvider(Color(0xFF1E1E23)),
                 fontWeight = FontWeight.Bold
