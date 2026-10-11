@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "MijiaLogger"
+rootProject.name = "BTHomeV2-Logger"
 include(":app")
