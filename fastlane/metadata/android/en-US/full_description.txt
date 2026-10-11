@@ -1,0 +1,15 @@
+BTHomeV2 Logger reads data from Bluetooth Low Energy sensors broadcasting unencrypted BTHome v2 advertisements.
+
+It is designed for sensors such as the Xiaomi Mijia LYWSD03MMC running PVVX / ATC MiThermometer firmware configured to use BTHome v2.
+
+Features:
+
+• Scan nearby BTHome v2 BLE sensors
+• Select and remember a sensor
+• Display temperature and humidity
+• Show battery percentage, battery voltage and Bluetooth signal strength
+• Save decoded measurements in a local text log
+• Display recent readings in an Android home-screen widget
+• Work locally without an account, cloud service or Internet connection
+
+The app currently supports unencrypted BTHome v2 advertisements and common temperature, humidity, battery and voltage objects.
