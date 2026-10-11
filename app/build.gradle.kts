@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.mijialogger"
+    namespace = "io.github.steanlab.bthomev2logger"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.mijialogger"
+        applicationId = "io.github.steanlab.bthomev2logger"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
