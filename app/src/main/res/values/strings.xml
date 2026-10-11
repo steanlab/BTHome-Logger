@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">BTHomeV2 Logger</string>
+    <string name="app_name">BTHome Logger</string>
     <string name="bt2h_widget_description">
         Shows the last readings from two BTHome sensors
     </string>

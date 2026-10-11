@@ -30,7 +30,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private const val WIDGET_PREFS_NAME = "bt2h_widget_data"
+private const val WIDGET_PREFS_NAME = "bthome_widget_data"
 
 class Bt2hWidget : GlanceAppWidget() {
 
@@ -73,7 +73,7 @@ private fun Bt2hWidgetContent(context: Context) {
             .clickable(actionStartActivity<MainActivity>())
     ) {
         Text(
-            text = "BTHomeV2 Logger",
+            text = "BTHome Logger",
             style = TextStyle(
                 color = ColorProvider(Color(0xFF1E1E23)),
                 fontWeight = FontWeight.Bold
@@ -192,8 +192,8 @@ private data class WidgetSensorData(
         }
 
         val ageSeconds = (
-            (System.currentTimeMillis() - lastSeenMillis) / 1000L
-        ).coerceAtLeast(0L)
+                (System.currentTimeMillis() - lastSeenMillis) / 1000L
+                ).coerceAtLeast(0L)
 
         return when {
             ageSeconds < 60L -> "${ageSeconds}s ago"
