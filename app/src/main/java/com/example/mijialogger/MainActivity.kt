@@ -674,7 +674,7 @@ private fun LoggerScreen(
         Spacer(modifier = Modifier.height(20.dp))
 
         Text(
-            text = "BT2H Logger",
+            text = "BTHomeV2 Logger",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold
         )
